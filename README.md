@@ -1,5 +1,10 @@
-# HBYS MM Yer İmi Kurulumu
+# HBYS MM Arka Plan Tarayıcı
 
-Bu depo yalnızca HBYS MM Hızlı Tarayıcı v2 yer iminin kurulum sayfasını yayımlar. Sürüm; canlı hasta listesi, güvenli kapatma düğmesi ve altı sayfalı yerel Excel çıktısı üretir.
+Fonet Web HBYS mortalite-morbidite tarayıcısı için herkese açık v3 kurulum sayfasıdır.
 
-Hasta verisi içermez ve HBYS'den alınan hiçbir veriyi internete göndermez.
+- Kontrollü paralel, salt-okunur GET taraması
+- Ameliyat sonrası POD 0-30 konsültasyon ve görüntüleme raporları
+- Ameliyat türüne göre morbidite/mortalite özeti
+- Sekiz sayfalı yerel Excel çıktısı
+
+Hasta verisi GitHub'a gönderilmez; yalnız tarayıcı kodu bu depodan yüklenir.

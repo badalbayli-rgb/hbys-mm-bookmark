@@ -4,13 +4,14 @@ MASAÜSTÜ CHROME
 1. Chrome'da chrome://bookmarks adresini açın.
 2. Sağ üstteki üç nokta menüsünden "Yer işaretlerini içe aktar" seçeneğini açın.
 3. HBYS-MM-Bookmark.html dosyasını seçin.
-4. HBYS Ameliyat listesini sorguladıktan sonra "HBYS MM Hızlı Tara" yer imine tıklayın.
+4. HBYS Ameliyat listesini sorguladıktan sonra "HBYS MM Arka Plan Tara" yer imine tıklayın.
 
 ALTERNATİF
 HBYS-MM-Bookmark.html dosyasını Chrome'da açıp "HBYS MM Hızlı Tara" bağlantısını yer imleri çubuğuna sürükleyebilirsiniz.
 
 NOT
-- Aynı hasta + aynı işlem numarası + aynı ameliyatın tekrarlanan liste satırı morbidite sayılmaz.
-- Sonraki gerçek ameliyat kaydı "klinik doğrulama gerekli" olarak işaretlenir.
+- Hastalar tek tek açılmaz; FONET salt-okunur servisleri kontrollü paralel taranır.
+- Konsültasyon ve görüntüleme yalnız ameliyat sonrası POD 0-30 döneminden alınır; içerikleri Excel'e yazılır.
+- Mükerrer liste satırı morbidite sayılmaz. Sonraki ameliyat ve yeni geliş kaydı manuel doğrulamaya alınır.
 - Hasta bilgileri herhangi bir sunucuya gönderilmez; çıktı yalnızca yerel Excel/JSON dosyasıdır.
 - Açılan tarama penceresi sağ üstteki kırmızı × düğmesiyle kapatılabilir.
