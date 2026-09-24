@@ -12,6 +12,8 @@ HBYS-MM-Bookmark.html dosyasını Chrome'da açıp "HBYS MM Hızlı Tara" bağla
 NOT
 - Hastalar tek tek açılmaz; FONET salt-okunur servisleri kontrollü paralel taranır.
 - Konsültasyon ve görüntüleme yalnız ameliyat sonrası POD 0-30 döneminden alınır; içerikleri Excel'e yazılır.
-- Mükerrer liste satırı morbidite sayılmaz. Sonraki ameliyat ve yeni geliş kaydı manuel doğrulamaya alınır.
+- Morbidite ve mortalite hastaları tek satırda gösterilir; kronolojik klinik izlem taburculuk POD bilgisiyle biter.
+- Aynı işlemdeki sonraki ameliyat bağımsız vaka sayılmaz; yeniden ameliyat olarak işaretlenir.
+- Sayısal konsültasyon durum kodları metin alanında gösterilmez. Negatif/şüpheli ifadeler kesin komplikasyon sayılmaz.
 - Hasta bilgileri herhangi bir sunucuya gönderilmez; çıktı yalnızca yerel Excel/JSON dosyasıdır.
 - Açılan tarama penceresi sağ üstteki kırmızı × düğmesiyle kapatılabilir.

@@ -1,7 +1,7 @@
 (async () => {
   'use strict';
 
-  const VERSION = '3.0.0';
+  const VERSION = '3.1.0';
   const WINDOW_DAYS = 30;
   const PATIENT_CONCURRENCY = 4;
   const REQUEST_TIMEOUT_MS = 15000;
@@ -23,6 +23,10 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
   const multiline = (value) => String(value ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/\r/g, '').split('\n').map(clean).filter(Boolean).join('\n');
+  const humanText = (value) => {
+    const text = clean(value);
+    return /^(?:[-+]?\d+(?:[.,]\d+)?)$/.test(text) ? '' : text;
+  };
   const norm = (value) => clean(value).toLocaleLowerCase('tr-TR');
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const clip = (value, max = 32700) => String(value ?? '').slice(0, max);
@@ -205,8 +209,15 @@
     const counts = new Map(); records.forEach((item) => counts.set(key(item), (counts.get(key(item)) || 0) + 1));
     const unique = records.filter((item, index, all) => all.findIndex((other) => key(other) === key(item)) === index);
     unique.forEach((item) => { item.mükerrerListeSatırı = Math.max(0, (counts.get(key(item)) || 1) - 1); });
+    const encounters = new Map();
+    unique.sort((a, b) => dateMs(a.ameliyatTarihi) - dateMs(b.ameliyatTarihi)).forEach((item) => {
+      const encounterKey = `${item.hastaId || item.tcKimlikNo || norm(item.adSoyad)}|${item.işlemNo || item.protokolNo}`;
+      if (!encounters.has(encounterKey)) encounters.set(encounterKey, { ...item, listeSonrakiAmeliyatlar: [] });
+      else encounters.get(encounterKey).listeSonrakiAmeliyatlar.push(item);
+    });
+    const indexCases = [...encounters.values()];
     if (total > sourceRecords.length) state.manual.push({ hasta: 'Liste geneli', işlemNo: '', ameliyat: '', konu: 'Sayfalama', açıklama: `FONET listesinde ${total} kayıt var; yalnızca ${sourceRecords.length} kayıt okunabildi.`, kaynak: 'Ameliyat listesi' });
-    return { raw: records, unique };
+    return { raw: records, unique: indexCases };
   };
 
   const clinicalRoot = (payload) => payload?.data || payload || {};
@@ -255,7 +266,7 @@
     });
     return rows.map((row) => {
       const date = firstValue(row.birimSevk?.sevkTarihi, row.etar, row.istemTarihi, row.tarih);
-      return { id: clean(row.id), hastaGelisId: clean(row.__hastaGelisId), tarih: formatDate(date), pod: pod(result.ameliyatTarihi, date), birim: clean(firstValue(row.birimSevk?.birim?.adi, row.istenenBirim?.adi, row.birimAdi)), hekim: clean(firstValue(row.birimSevk?.personel?.kimlik?.adiSoyadi, row.personel?.kimlik?.adiSoyadi, row.doktorAdi)), istem: multiline(firstValue(row.istemSebebi, row.istemAciklama, row.aciklama)), sonuç: consultAnswer(row), durum: clean(row.durum), fonetKaydı: `Konsültasyon ${clean(row.id) || '(kimlik yok)'}`, fonetTarihi: formatDate(date) };
+      return { id: clean(row.id), hastaGelisId: clean(row.__hastaGelisId), tarih: formatDate(date), pod: pod(result.ameliyatTarihi, date), birim: humanText(firstValue(row.birimSevk?.birim?.adi, row.istenenBirim?.adi, row.birimAdi)), hekim: humanText(firstValue(row.birimSevk?.personel?.kimlik?.adiSoyadi, row.personel?.kimlik?.adiSoyadi, row.doktorAdi)), istem: multiline(firstValue(row.istemSebebi, row.istemAciklama, row.aciklama)), sonuç: consultAnswer(row), durum: humanText(row.durum), fonetKaydı: `Konsültasyon ${clean(row.id) || '(kimlik yok)'}`, fonetTarihi: formatDate(date) };
     }).filter((row) => inPostopWindow(result.ameliyatTarihi, row.tarih))
       .filter((row, index, all) => all.findIndex((other) => clean(other.id) === clean(row.id) && clean(other.hastaGelisId) === clean(row.hastaGelisId)) === index);
   };
@@ -296,30 +307,81 @@
   };
 
   const COMPLICATIONS = [
-    ['Anastomoz kaçağı', /anastomoz.{0,20}(kaçak|kacak|leak)/i], ['Safra kaçağı', /safra.{0,20}(kaçak|kacak)/i],
-    ['Postoperatif kanama', /(postop|postoperatif|ameliyat sonrası).{0,30}kanama|hemoperiton/i], ['Apse / koleksiyon', /apse|abse|koleksiyon/i],
-    ['Cerrahi alan enfeksiyonu', /cerrahi alan enfeks|yara yeri enfeks/i], ['Yara ayrışması', /dehisens|evisserasyon|yara.{0,20}ayrış/i],
-    ['Fistül', /fistül|fistul/i], ['İleus', /postop.{0,20}ileus|mekanik ileus/i], ['Perforasyon', /perforasyon/i],
-    ['Sepsis', /sepsis|septik şok|septik sok/i], ['Pnömoni', /pnömoni|pnomoni/i], ['Tromboemboli', /pulmoner embol|derin ven trombo|tromboemboli/i],
-    ['Böbrek yetmezliği', /akut böbrek (hasarı|yetmezliği)|akut bobrek/i], ['Solunum yetmezliği', /solunum yetmezliği|respiratuvar yetmezlik/i]
+    { name: 'Anastomoz kaçağı', pattern: /anastomoz.{0,30}(kaçak|kacak|leak)/i },
+    { name: 'Safra kaçağı', pattern: /(postop(?:eratif)?\s+)?safra.{0,30}(kaçak|kacak)|safralı\s+(gelen|dren)/i },
+    { name: 'Kaçak (yeri belirtilmemiş)', pattern: /\b(kaçak|kacak|leak)\b/i },
+    { name: 'Postoperatif kanama', pattern: /(postop|postoperatif|ameliyat sonrası).{0,30}kanama|hemoperiton/i },
+    { name: 'Apse / koleksiyon', pattern: /\b(apse|abse|koleksiyon)\b/i },
+    { name: 'Cerrahi alan enfeksiyonu', pattern: /cerrahi alan enfeks|yara yeri enfeks/i },
+    { name: 'Yara ayrışması', pattern: /dehisens|evisserasyon|yara.{0,20}ayrış/i },
+    { name: 'Fistül', pattern: /\b(fistül|fistul)\b/i },
+    { name: 'İleus', pattern: /postop.{0,20}ileus|mekanik ileus/i },
+    { name: 'Yeni postoperatif perforasyon', pattern: /(postop|postoperatif|ameliyat sonrası).{0,60}perforasyon.{0,30}(geliş|saptan|izlen|tespit|oluş)|perforasyon.{0,60}(postop|postoperatif|ameliyat sonrası).{0,30}(geliş|saptan|izlen|tespit|oluş)/i },
+    { name: 'Sepsis', pattern: /sepsis|septik şok|septik sok/i },
+    { name: 'Pnömoni', pattern: /pnömoni|pnomoni/i },
+    { name: 'Plevral efüzyon', pattern: /plevral\s+(efüzyon|effüzyon|sıvı|mayi)/i },
+    { name: 'Deliryum', pattern: /deliryum|tıbbi duruma sekonder delryum/i },
+    { name: 'Tromboemboli', pattern: /pulmoner embol|derin ven trombo|tromboemboli/i },
+    { name: 'Böbrek yetmezliği', pattern: /akut böbrek (hasarı|yetmezliği)|akut bobrek/i },
+    { name: 'Solunum yetmezliği', pattern: /solunum yetmezliği|respiratuvar yetmezlik/i }
   ];
+  const NEGATED_FINDING = /\b(yok|izlenmedi|saptanmadı|saptanmamıştır|tespit edilmedi|mevcut değil|düşünülmedi|ekarte edildi|lehine bulgu (?:yok|izlenmedi))\b/i;
+  const UNCERTAIN_FINDING = /\?|\b(şüphe|suphe|olası|olasi|ön tanı|on tani|açısından değerlendiril|klinik korelasyon)\b/i;
+  const findingContexts = (text, pattern) => multiline(text).split(/\n+|(?<=[.!?])\s+/).map(clean).filter((part) => pattern.test(part));
   const complicationCandidates = (result) => {
     const out = [];
-    const inspect = (text, source, date) => {
+    const inspect = (text, source, date, evidenceType = 'request') => {
       const value = multiline(text); if (!value) return;
-      for (const [name, pattern] of COMPLICATIONS) {
-        if (!pattern.test(value)) continue;
-        const key = `${name}|${source}|${date}`; if (out.some((item) => item.key === key)) continue;
-        out.push({ key, komplikasyon: name, tarih: date, pod: pod(result.ameliyatTarihi, date), fonetKaydı: source, fonetTarihi: date, kanıt: clip(value, 1200), doğrulama: 'Manuel doğrulama gerekli', clavienDindo: 'Manuel doğrulama gerekli' });
+      for (const { name, pattern } of COMPLICATIONS) {
+        const contexts = findingContexts(value, pattern);
+        if (!contexts.length || contexts.every((part) => NEGATED_FINDING.test(part))) continue;
+        const positive = contexts.find((part) => !NEGATED_FINDING.test(part) && !UNCERTAIN_FINDING.test(part));
+        const evidence = positive || contexts.find((part) => !NEGATED_FINDING.test(part));
+        if (!evidence) continue;
+        const confirmed = positive && /^(result|report)$/.test(evidenceType);
+        const key = `${name}|${source}|${date}`;
+        const candidate = { key, komplikasyon: name, tarih: date, pod: pod(result.ameliyatTarihi, date), fonetKaydı: source, fonetTarihi: date, kanıt: clip(evidence, 1200), doğrulama: confirmed ? 'Doğrulandı' : positive ? 'Kaynak metinde olumlu ifade — klinik doğrulama gerekli' : 'Olası/şüpheli — manuel doğrulama gerekli', clavienDindo: 'Manuel doğrulama gerekli' };
+        const existingIndex = out.findIndex((item) => item.key === key);
+        if (existingIndex >= 0) {
+          if (confirmed && out[existingIndex].doğrulama !== 'Doğrulandı') out[existingIndex] = candidate;
+        } else out.push(candidate);
       }
     };
-    result.konsültasyonlar.forEach((row) => inspect(`${row.istem}\n${row.sonuç}`, row.fonetKaydı, row.fonetTarihi));
-    result.görüntülemeler.forEach((row) => inspect(`${row.tetkik}\n${row.rapor}`, row.fonetKaydı, row.fonetTarihi));
+    result.konsültasyonlar.forEach((row) => {
+      inspect(row.istem, row.fonetKaydı, row.fonetTarihi, 'request');
+      inspect(row.sonuç, row.fonetKaydı, row.fonetTarihi, 'result');
+    });
+    result.görüntülemeler.forEach((row) => inspect(row.rapor, row.fonetKaydı, row.fonetTarihi, 'report'));
     result.yenidenAmeliyat.forEach((row) => {
       inspect(row.ameliyat, row.fonetKaydı, row.fonetTarihi);
       if (!out.some((item) => item.fonetKaydı === row.fonetKaydı)) out.push({ key: `reop|${row.id}`, komplikasyon: 'Yeniden ameliyat — neden doğrulanmalı', tarih: row.tarih, pod: row.pod, fonetKaydı: row.fonetKaydı, fonetTarihi: row.fonetTarihi, kanıt: row.ameliyat, doğrulama: 'Manuel doğrulama gerekli', clavienDindo: /genel/i.test(row.anestezi) ? 'Olası IIIb — manuel doğrulama gerekli' : 'Manuel doğrulama gerekli' });
     });
-    return out.map(({ key, ...item }) => item);
+    const hasSpecificLeak = out.some((item) => /kaçağı$/i.test(item.komplikasyon));
+    return out.filter((item) => item.komplikasyon !== 'Kaçak (yeri belirtilmemiş)' || !hasSpecificLeak).map(({ key, ...item }) => item);
+  };
+
+  const timelineText = (value, max = 650) => clip(multiline(value).replace(/\n+/g, ' · '), max);
+  const clinicalTimeline = (result) => {
+    const events = [];
+    const add = (date, type, detail, source = '') => {
+      const text = timelineText(detail); if (!text) return;
+      const eventPod = pod(result.ameliyatTarihi, date);
+      const prefix = `${formatDate(date) || 'Tarih yok'} · POD ${eventPod ?? '?'} · ${type}`;
+      const line = `${prefix}: ${text}${source ? ` [${source}]` : ''}`;
+      const key = norm(`${date}|${type}|${text}`); if (!events.some((item) => item.key === key)) events.push({ key, date, line });
+    };
+    add(result.ameliyatTarihi, 'Ameliyat', result.standartAmeliyatAdı || result.ameliyat, `Ameliyat ${result.surgeryRecordId || result.işlemNo}`);
+    result.konsültasyonlar.forEach((item) => add(item.tarih, `Konsültasyon${item.birim ? ` (${item.birim})` : ''}`, [item.istem && `İstem: ${item.istem}`, item.sonuç && `Sonuç: ${item.sonuç}`].filter(Boolean).join('\n'), item.fonetKaydı));
+    result.görüntülemeler.forEach((item) => add(item.tarih, `Görüntüleme (${item.tetkik || 'tetkik adı yok'})`, item.rapor || 'Rapor metni bulunamadı.', item.fonetKaydı));
+    result.yenidenBaşvuruYatış.forEach((item) => add(item.tarih, 'Yeniden başvuru/yatış adayı', item.doğrulama, item.fonetKaydı));
+    result.yenidenAmeliyat.forEach((item) => add(item.tarih, 'Yeniden ameliyat adayı', item.ameliyat, item.fonetKaydı));
+    result.yoğunBakım.forEach((item) => add(item.tarih || result.yatışTarihi, 'Yoğun bakım', item.birim || 'Yoğun bakım kaydı', item.kaynak));
+    if (result.ölüm.var) add(result.ölüm.tarih, 'Ölüm', 'Ölüm kaydı', result.ölüm.kaynak);
+    events.sort((a, b) => (dateMs(a.date) || 0) - (dateMs(b.date) || 0) || a.line.localeCompare(b.line, 'tr'));
+    const discharge = result.taburculukTarihi
+      ? `${formatDate(result.taburculukTarihi)} · POD ${result.taburcuPOD ?? '?'} · Taburcu edildi.`
+      : 'Taburculuk tarihi kaynakta bulunmadı; taburcu POD hesaplanamadı.';
+    return clip([...events.map((item) => item.line), discharge].join('\n'), 32700);
   };
 
   async function runPool(items, concurrency, worker) {
@@ -353,7 +415,9 @@
     });
     const [consults, imaging, surgeries] = await Promise.all([safe('Konsültasyon', () => fetchConsultations(result)), safe('Radyoloji', () => fetchImaging(result)), safe('Ameliyat geçmişi', () => fetchSurgeries(result))]);
     result.konsültasyonlar = consults || []; result.görüntülemeler = imaging || [];
-    result.yenidenAmeliyat = (surgeries || []).filter((row) => row.pod != null && row.pod > 0 && row.pod <= WINDOW_DAYS && clean(row.id) !== clean(result.surgeryRecordId));
+    const listedReoperations = (result.listeSonrakiAmeliyatlar || []).map((row) => ({ id: row.surgeryRecordId, tarih: row.ameliyatTarihi, pod: pod(result.ameliyatTarihi, row.ameliyatTarihi), ameliyat: row.standartAmeliyatAdı || row.ameliyat, birim: row.uzmanlık, anestezi: '', fonetKaydı: `Ameliyat listesi ${row.surgeryRecordId || row.işlemNo}`, fonetTarihi: row.ameliyatTarihi }));
+    result.yenidenAmeliyat = [...(surgeries || []).filter((row) => row.pod != null && row.pod > 0 && row.pod <= WINDOW_DAYS && clean(row.id) !== clean(result.surgeryRecordId)), ...listedReoperations]
+      .filter((row, index, all) => all.findIndex((other) => (clean(row.id) && clean(other.id) === clean(row.id)) || `${clean(other.tarih)}|${norm(other.ameliyat)}` === `${clean(row.tarih)}|${norm(row.ameliyat)}`) === index);
     result.komplikasyonlar = complicationCandidates(result);
     if (result.yatışTarihi && result.taburculukTarihi) {
       result.postoperatifYatışSüresi = pod(result.ameliyatTarihi, result.taburculukTarihi); result.taburcuPOD = result.postoperatifYatışSüresi;
@@ -364,8 +428,10 @@
     if (result.ölüm.var) { result.mortaliteDurumu = 'Evet'; result.enYüksekClavienDindo = 'V'; }
     if (result.komplikasyonlar.length || result.yenidenAmeliyat.length || result.yenidenBaşvuruYatış.length) {
       result.morbiditeDurumu = result.komplikasyonlar.some((x) => x.doğrulama === 'Doğrulandı') ? 'Evet' : 'Manuel doğrulama gerekli';
-      result.enYüksekClavienDindo ||= result.komplikasyonlar.map((x) => x.clavienDindo).find((x) => /^V$|^IV|^III|^II|^I$/i.test(x)) || 'Manuel doğrulama gerekli';
+      const percutaneousIntervention = result.görüntülemeler.some((row) => /perkütan.{0,50}(drenaj|kolanjiografi)|\bPTK\b/i.test(`${row.tetkik}\n${row.rapor}`));
+      result.enYüksekClavienDindo ||= result.komplikasyonlar.map((x) => x.clavienDindo).find((x) => /^V$|^IV|^III|^II|^I$/i.test(x)) || (percutaneousIntervention ? 'Olası IIIa — girişimsel işlem; manuel doğrulama gerekli' : 'Manuel doğrulama gerekli');
     } else if (result.manuelDoğrulama.length) result.morbiditeDurumu = 'Manuel doğrulama gerekli';
+    result.kronolojikKlinikİzlem = clinicalTimeline(result);
     return result;
   };
 
@@ -440,7 +506,7 @@
     for (const [name, content] of Object.entries(files)) {
       const filename = encoder.encode(name); const data = encoder.encode(content); const crc = crc32(data);
       const localHeader = new Uint8Array([80,75,3,4,20,0,0,0,0,0,0,0,0,0,...u32(crc),...u32(data.length),...u32(data.length),...u16(filename.length),0,0,...filename,...data]); local.push(localHeader);
-      const centralHeader = new Uint8Array([80,75,1,2,20,0,20,0,0,0,0,0,0,0,0,0,...u32(crc),...u32(data.length),...u32(data.length),...u16(filename.length),0,0,0,0,0,0,0,0,0,0,...u32(offset),...filename]); central.push(centralHeader); offset += localHeader.length;
+      const centralHeader = new Uint8Array([80,75,1,2,20,0,20,0,0,0,0,0,0,0,0,0,...u32(crc),...u32(data.length),...u32(data.length),...u16(filename.length),0,0,0,0,0,0,0,0,0,0,0,0,...u32(offset),...filename]); central.push(centralHeader); offset += localHeader.length;
     }
     const centralSize = central.reduce((sum, item) => sum + item.length, 0); const count = central.length;
     return new Blob([...local, ...central, new Uint8Array([80,75,5,6,0,0,0,0,...u16(count),...u16(count),...u32(centralSize),...u32(offset),0,0])], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -449,32 +515,35 @@
   const makeWorkbook = () => {
     const main = [['Standart Ameliyat', 'Toplam', 'Sorunsuz', 'Morbidite', 'Morbidite %', 'Mortalite', 'Mortalite %', 'Manuel Doğrulama', 'Rapor Cümlesi']];
     groups().forEach((group) => main.push([group.ameliyat, group.total, group.cleanCount, group.morbidity, group.morbidityRate, group.mortality, group.mortalityRate, group.manual, group.narrative]));
-    const morbidity = [['Hasta', 'T.C. Kimlik No', 'Protokol/Yatış No', 'Yatış Tarihi', 'Ameliyat Tarihi', 'Standart Ameliyat', 'Taburculuk', 'Taburcu POD', 'Komplikasyon', 'Komplikasyon POD', 'En Yüksek Clavien–Dindo', 'Yoğun Bakım', 'Yeniden Yatış', 'Yeniden Ameliyat', 'FONET Kaydı', 'FONET Tarihi', 'Kanıt / Not']];
-    const mortality = [['Hasta', 'T.C. Kimlik No', 'Protokol/Yatış No', 'Ameliyat Tarihi', 'Standart Ameliyat', 'Ölüm Tarihi', 'FONET Kaynağı', 'Komplikasyonlar', 'En Yüksek Clavien–Dindo']];
-    const all = [['Hasta', 'T.C. Kimlik No', 'Protokol/Yatış No', 'İşlem No', 'Yatış Tarihi', 'Ameliyat Tarihi', 'Standart Ameliyat', 'Taburculuk', 'Postoperatif Yatış Süresi', 'Taburcu POD', 'Morbidite', 'Mortalite', 'Yoğun Bakım', 'Yeniden Yatış', 'Yeniden Ameliyat', 'En Yüksek Clavien–Dindo', 'Mükerrer Liste Satırı', 'Tarama Notu']];
+    const morbidity = [['Hasta', 'T.C. Kimlik No', 'Protokol/Yatış No', 'Yatış Tarihi', 'Ameliyat Tarihi', 'Standart Ameliyat', 'Taburculuk', 'Taburcu POD', 'Komplikasyonlar', 'Komplikasyon POD', 'En Yüksek Clavien–Dindo', 'Yoğun Bakım', 'Yeniden Yatış', 'Yeniden Ameliyat', 'FONET Kayıtları', 'FONET Tarihleri', 'Kanıt / Not', 'Kronolojik Klinik İzlem']];
+    const mortality = [['Hasta', 'T.C. Kimlik No', 'Protokol/Yatış No', 'Ameliyat Tarihi', 'Standart Ameliyat', 'Ölüm Tarihi', 'FONET Kaynağı', 'Komplikasyonlar', 'En Yüksek Clavien–Dindo', 'Kronolojik Klinik İzlem']];
+    const all = [['Hasta', 'T.C. Kimlik No', 'Protokol/Yatış No', 'İşlem No', 'Yatış Tarihi', 'Ameliyat Tarihi', 'Standart Ameliyat', 'Taburculuk', 'Postoperatif Yatış Süresi', 'Taburcu POD', 'Morbidite', 'Mortalite', 'Yoğun Bakım', 'Yeniden Yatış', 'Yeniden Ameliyat', 'En Yüksek Clavien–Dindo', 'Mükerrer Liste Satırı', 'Tarama Notu', 'Kronolojik Klinik İzlem']];
     const complications = [['Hasta', 'İşlem No', 'Standart Ameliyat', 'Komplikasyon', 'Tarih', 'POD', 'Clavien–Dindo', 'Doğrulama', 'FONET Kaydı', 'FONET Tarihi', 'Kanıt']];
     const consultations = [['Hasta', 'İşlem No', 'Ameliyat Tarihi', 'Konsültasyon Tarihi', 'POD', 'Birim', 'Hekim', 'İstem İçeriği', 'Konsültasyon Sonucu', 'Durum', 'FONET Kaydı']];
     const imaging = [['Hasta', 'İşlem No', 'Ameliyat Tarihi', 'İstem Tarihi', 'POD', 'Tetkik', 'Çekim Tarihi', 'Rapor Tarihi', 'Görüntüleme Raporu', 'FONET Kaydı']];
     const manual = [['Hasta', 'İşlem No', 'Ameliyat', 'Konu', 'Açıklama', 'Kaynak']];
     state.results.forEach((result) => {
-      all.push([result.adSoyad, result.tcKimlikNo, result.protokolNo, result.işlemNo, result.yatışTarihi, result.ameliyatTarihi, result.standartAmeliyatAdı, result.taburculukTarihi, result.postoperatifYatışSüresi ?? '', result.taburcuPOD ?? '', result.morbiditeDurumu, result.ölüm.var ? 'Evet' : 'Hayır', result.yoğunBakım.length ? 'Evet' : 'Hayır', result.yenidenBaşvuruYatış.length ? 'Evet' : 'Hayır', result.yenidenAmeliyat.length ? 'Evet' : 'Hayır', result.enYüksekClavienDindo, result.mükerrerListeSatırı, result.veriHataları.join(' | ')]);
+      all.push([result.adSoyad, result.tcKimlikNo, result.protokolNo, result.işlemNo, result.yatışTarihi, result.ameliyatTarihi, result.standartAmeliyatAdı, result.taburculukTarihi, result.postoperatifYatışSüresi ?? '', result.taburcuPOD ?? '', result.morbiditeDurumu, result.ölüm.var ? 'Evet' : 'Hayır', result.yoğunBakım.length ? 'Evet' : 'Hayır', result.yenidenBaşvuruYatış.length ? 'Evet' : 'Hayır', result.yenidenAmeliyat.length ? 'Evet' : 'Hayır', result.enYüksekClavienDindo, result.mükerrerListeSatırı, result.veriHataları.join(' | '), result.kronolojikKlinikİzlem]);
       result.komplikasyonlar.forEach((item) => {
         complications.push([result.adSoyad, result.işlemNo, result.standartAmeliyatAdı, item.komplikasyon, item.tarih, item.pod ?? '', item.clavienDindo, item.doğrulama, item.fonetKaydı, item.fonetTarihi, item.kanıt]);
-        morbidity.push([result.adSoyad, result.tcKimlikNo, result.protokolNo, result.yatışTarihi, result.ameliyatTarihi, result.standartAmeliyatAdı, result.taburculukTarihi, result.taburcuPOD ?? '', item.komplikasyon, item.pod ?? '', result.enYüksekClavienDindo, result.yoğunBakım.length ? 'Evet' : 'Hayır', result.yenidenBaşvuruYatış.length ? 'Evet' : 'Hayır', result.yenidenAmeliyat.length ? 'Evet' : 'Hayır', item.fonetKaydı, item.fonetTarihi, item.kanıt]);
       });
-      if (result.ölüm.var) mortality.push([result.adSoyad, result.tcKimlikNo, result.protokolNo, result.ameliyatTarihi, result.standartAmeliyatAdı, result.ölüm.tarih, result.ölüm.kaynak, result.komplikasyonlar.map((x) => x.komplikasyon).join(' | '), result.enYüksekClavienDindo]);
+      if (result.morbiditeDurumu !== 'Hayır' || result.komplikasyonlar.length || result.yenidenAmeliyat.length || result.yenidenBaşvuruYatış.length || result.yoğunBakım.length) {
+        const unique = (values) => [...new Set(values.filter((value) => clean(value) !== ''))].join(' | ');
+        morbidity.push([result.adSoyad, result.tcKimlikNo, result.protokolNo, result.yatışTarihi, result.ameliyatTarihi, result.standartAmeliyatAdı, result.taburculukTarihi, result.taburcuPOD ?? '', unique(result.komplikasyonlar.map((item) => item.komplikasyon)), unique(result.komplikasyonlar.map((item) => item.pod ?? '')), result.enYüksekClavienDindo, result.yoğunBakım.length ? 'Evet' : 'Hayır', result.yenidenBaşvuruYatış.length ? 'Evet' : 'Hayır', result.yenidenAmeliyat.length ? 'Evet' : 'Hayır', unique(result.komplikasyonlar.map((item) => item.fonetKaydı)), unique(result.komplikasyonlar.map((item) => item.fonetTarihi)), clip(result.komplikasyonlar.map((item) => `${item.komplikasyon}: ${item.kanıt}`).join('\n'), 32700), result.kronolojikKlinikİzlem]);
+      }
+      if (result.ölüm.var) mortality.push([result.adSoyad, result.tcKimlikNo, result.protokolNo, result.ameliyatTarihi, result.standartAmeliyatAdı, result.ölüm.tarih, result.ölüm.kaynak, [...new Set(result.komplikasyonlar.map((x) => x.komplikasyon))].join(' | '), result.enYüksekClavienDindo, result.kronolojikKlinikİzlem]);
       result.konsültasyonlar.forEach((item) => consultations.push([result.adSoyad, result.işlemNo, result.ameliyatTarihi, item.tarih, item.pod ?? '', item.birim, item.hekim, item.istem, item.sonuç, item.durum, item.fonetKaydı]));
       result.görüntülemeler.forEach((item) => imaging.push([result.adSoyad, result.işlemNo, result.ameliyatTarihi, item.tarih, item.pod ?? '', item.tetkik, item.çekimTarihi, item.raporTarihi, item.rapor, item.fonetKaydı]));
     });
     state.manual.forEach((item) => manual.push([item.hasta, item.işlemNo, item.ameliyat, item.konu, item.açıklama, item.kaynak]));
     state.errors.forEach((item) => manual.push([item.adSoyad, item.işlemNo, item.standartAmeliyatAdı, 'Tarama hatası', item.hata, `Ameliyat ${item.surgeryRecordId}`]));
-    if (morbidity.length === 1) morbidity.push(['', '', '', '', '', '', '', '', 'Doğrulanmış morbidite kaydı yok', '', '', '', '', '', '', '', '']);
-    if (mortality.length === 1) mortality.push(['', '', '', '', '', '', '', 'Mortalite kaydı yok', '']);
+    if (morbidity.length === 1) morbidity.push(['', '', '', '', '', '', '', '', 'Morbidite veya morbidite adayı kaydı yok', '', '', '', '', '', '', '', '', '']);
+    if (mortality.length === 1) mortality.push(['', '', '', '', '', '', '', 'Mortalite kaydı yok', '', '']);
     if (complications.length === 1) complications.push(['', '', '', 'Komplikasyon adayı yok', '', '', '', '', '', '', '']);
     if (manual.length === 1) manual.push(['', '', '', 'Yok', 'Manuel doğrulama notu yok', '']);
     const sheets = [
-      ['Ana Rapor', main, [38,10,11,11,12,11,12,17,100], () => 0], ['Morbidite', morbidity, [24,16,17,19,19,38,19,12,30,14,22,14,16,16,25,19,70], () => 2],
-      ['Mortalite', mortality, [24,16,17,19,38,19,30,60,22], () => 3], ['Tüm Ameliyatlar', all, [24,16,17,15,19,19,38,19,22,12,18,12,14,16,16,22,17,65], () => 0],
+      ['Ana Rapor', main, [38,10,11,11,12,11,12,17,100], () => 0], ['Morbidite', morbidity, [24,16,17,19,19,38,19,12,38,18,22,14,16,16,34,24,80,120], () => 2],
+      ['Mortalite', mortality, [24,16,17,19,38,19,30,60,22,120], () => 3], ['Tüm Ameliyatlar', all, [24,16,17,15,19,19,38,19,22,12,18,12,14,16,16,22,17,65,120], () => 0],
       ['Komplikasyonlar', complications, [24,15,38,30,19,10,22,22,25,19,70], () => 2], ['Konsültasyonlar', consultations, [24,15,19,19,10,30,24,70,90,18,25], () => 4],
       ['Görüntülemeler', imaging, [24,15,19,19,10,40,19,19,100,25], () => 4], ['Manuel Doğrulama', manual, [24,15,38,28,90,45], () => 3]
     ];
