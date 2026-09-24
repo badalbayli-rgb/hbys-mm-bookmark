@@ -2,6 +2,7 @@
   'use strict';
 
   const VERSION = '3.2.0';
+  // Existing v3.1 bookmark loader compatibility: const VERSION = '3.1.0'
   const WINDOW_DAYS = 30;
   const PATIENT_CONCURRENCY = 4;
   const REQUEST_TIMEOUT_MS = 15000;
